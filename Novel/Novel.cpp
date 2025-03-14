@@ -238,6 +238,31 @@ std::unique_ptr<std::unique_ptr<double[]>[]> ComputeTargetsMedians(const std::un
 }
 ///////// End medians
 
+///////// Random triangles
+std::unique_ptr<std::unique_ptr<double[]>[]> MakeRandomMatrixForTriangles(int rows, int cols, double min, double max) {
+	std::unique_ptr<std::unique_ptr<double[]>[]> matrix;
+	matrix = std::make_unique<std::unique_ptr<double[]>[]>(rows);
+	for (int i = 0; i < rows; ++i) {
+		matrix[i] = std::make_unique<double[]>(cols);
+		for (int j = 0; j < cols; ++j) {
+			matrix[i][j] = static_cast<double>((rand() % 1000) / 1000.0) * (max - min) + min;
+		}
+	}
+	return matrix;
+}
+double AreaOfTriangle(double x1, double y1, double x2, double y2, double x3, double y3) {
+	double A = 0.5 * abs(x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2));
+	return A;
+}
+std::unique_ptr<double[]> ComputeAreasOfTriangles(std::unique_ptr<std::unique_ptr<double[]>[]>& matrix, int N) {
+	auto u = std::make_unique<double[]>(N);
+	for (int i = 0; i < N; ++i) {
+		u[i] = AreaOfTriangle(matrix[i][0], matrix[i][1], matrix[i][2], matrix[i][3], matrix[i][4], matrix[i][5]);
+	}
+	return u;
+}
+///////// End of random triangles
+
 void TestSingleFunction() {
 	int nTrainingRecords = 1000;
 	int nValidationRecords = 200;
@@ -604,7 +629,7 @@ void Tetrahedron() {
 	auto computed2 = std::make_unique<double[]>(nValidationRecords);
 	auto computed3 = std::make_unique<double[]>(nValidationRecords);
 
-	printf("Training faces of random tetrahedrons\n");
+	printf("Training areas of faces of random tetrahedrons\n");
 	for (int epoch = 0; epoch < 16; ++epoch) {
 		for (int i = 0; i < nTrainingRecords; ++i) {
 			layer0->Input2Output(features_training[i], models0, indexes0, offsets0);
@@ -782,6 +807,112 @@ void Medians() {
 	printf("\n");
 }
 
+void AreasOfTriangles() {
+	int nFeatures = 6;
+	int nTargets = 1;
+	int nTrainingRecords = 10000;
+	int nValidationRecords = 2000;
+	auto features_training = MakeRandomMatrixForTriangles(nTrainingRecords, nFeatures, 0.0, 1.0);
+	auto features_validation = MakeRandomMatrixForTriangles(nValidationRecords, nFeatures, 0.0, 1.0);
+	auto targets_training = ComputeAreasOfTriangles(features_training, nTrainingRecords);
+	auto targets_validation = ComputeAreasOfTriangles(features_validation, nValidationRecords);
+
+	//data is ready, we start training
+	clock_t start_application = clock();
+	clock_t current_time = clock();
+
+	std::vector<double> argmin;
+	std::vector<double> argmax;
+	Helper::FindMinMaxMatrix(argmin, argmax, features_training, nTrainingRecords, nFeatures);
+
+	int nU0 = 30;
+	int nU1 = 6;
+	int nU2 = nTargets;
+
+	auto layer0 = std::make_unique<Layer>(nU0, nFeatures, argmin, argmax, 3);
+	auto layer1 = std::make_unique<Layer>(nU1, nU0, 12);
+	auto layer2 = std::make_unique<Layer>(nU2, nU1, 12);
+
+	auto models0 = std::make_unique<double[]>(nU0);
+	auto models1 = std::make_unique<double[]>(nU1);
+	auto models2 = std::make_unique<double[]>(nU2);
+
+	auto deltas2 = std::make_unique<double[]>(nU2);
+	auto deltas1 = std::make_unique<double[]>(nU1);
+	auto deltas0 = std::make_unique<double[]>(nU0);
+
+	auto indexes0 = std::make_unique<std::unique_ptr<int[]>[]>(nU0);
+	auto offsets0 = std::make_unique<std::unique_ptr<double[]>[]>(nU0);
+	for (int i = 0; i < nU0; ++i) {
+		indexes0[i] = std::make_unique<int[]>(nFeatures);
+		offsets0[i] = std::make_unique<double[]>(nFeatures);
+	}
+
+	auto indexes1 = std::make_unique<std::unique_ptr<int[]>[]>(nU1);
+	auto offsets1 = std::make_unique<std::unique_ptr<double[]>[]>(nU1);
+	for (int i = 0; i < nU1; ++i) {
+		indexes1[i] = std::make_unique<int[]>(nU0);
+		offsets1[i] = std::make_unique<double[]>(nU0);
+	}
+
+	auto indexes2 = std::make_unique<std::unique_ptr<int[]>[]>(nU2);
+	auto offsets2 = std::make_unique<std::unique_ptr<double[]>[]>(nU2);
+	for (int i = 0; i < nU2; ++i) {
+		indexes2[i] = std::make_unique<int[]>(nU1);
+		offsets2[i] = std::make_unique<double[]>(nU1);
+	}
+
+	auto actual0 = std::make_unique<double[]>(nValidationRecords);
+	auto computed0 = std::make_unique<double[]>(nValidationRecords);
+
+	printf("Training for areas of random triangles\n");
+	for (int epoch = 0; epoch < 30; ++epoch) {
+		for (int i = 0; i < nTrainingRecords; ++i) {
+			layer0->Input2Output(features_training[i], models0, indexes0, offsets0);
+			layer1->Input2Output(models0, models1, indexes1, offsets1);
+			layer2->Input2Output(models1, models2, indexes2, offsets2);
+
+			for (int j = 0; j < nTargets; ++j) {
+				deltas2[j] = targets_training[i] - models2[j];
+			}
+
+			std::fill(deltas0.get(), deltas0.get() + nU0, 0.0);
+			std::fill(deltas1.get(), deltas1.get() + nU1, 0.0);
+
+			layer2->GetDeltas(deltas2, deltas1, indexes2);
+			layer1->GetDeltas(deltas1, deltas0, indexes1);
+
+			layer2->Update(models1, deltas2, 0.01, indexes2, offsets2);
+			layer1->Update(models0, deltas1, 0.1, indexes1, offsets1);
+			layer0->Update(features_training[i], deltas0, 0.1, indexes0, offsets0);
+		}
+
+		double error = 0.0;
+		for (int i = 0; i < nValidationRecords; ++i) {
+			layer0->Input2Output(features_validation[i], models0);
+			layer1->Input2Output(models0, models1);
+			layer2->Input2Output(models1, models2);
+
+			for (int j = 0; j < nTargets; ++j) {
+				double err = targets_validation[i] - models2[j];
+				error += err * err;
+			}
+
+			actual0[i] = targets_validation[i];
+			computed0[i] = models2[0];
+		}
+		double p1 = Helper::Pearson(computed0, actual0, nValidationRecords);
+
+		error /= nTargets;
+		error /= nValidationRecords;
+		error = sqrt(error);
+		current_time = clock();
+		printf("Epoch %d, RMSE %f, Pearson: %f, time %2.3f\n", epoch, error, p1,
+			(double)(current_time - start_application) / CLOCKS_PER_SEC);
+	}
+	printf("\n");
+}
+
 int main() {
 	srand((unsigned int)time(NULL));
 	
@@ -792,13 +923,16 @@ int main() {
 	TestSingleUrysohn();
 	TestLayer();
 
+	//Related targets, the medians of random triangles.
+	Medians();
+
+	//Areas of random triangles.
+	AreasOfTriangles();
+
 	//This simple unit test, features are random matrices of 4 by 4, targets are their determinants.
 	Det_4_4();
 
-	//Related targets, the areas of the faces of tetrahedron given by random vertices
+	//Related targets, the areas of the faces of tetrahedron given by random vertices.
 	Tetrahedron();
-
-	//Related targets, the medians of random triangles
-	Medians();
 }
 
