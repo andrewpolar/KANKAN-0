@@ -184,6 +184,60 @@ std::unique_ptr<std::unique_ptr<double[]>[]> ComputeTargetMatrix(const std::uniq
 }
 //////////// End tetrahedron
 
+///////// Medians
+double Median1(double x1, double y1, double x2, double y2, double x3, double y3) {
+	double t1 = x1 - (x2 + x3) / 2.0;
+	double t2 = y1 - (y2 + y3) / 2.0;
+	t1 *= t1;
+	t2 *= t2;
+	return sqrt(t1 + t2);
+}
+
+double Median2(double x1, double y1, double x2, double y2, double x3, double y3)
+{
+	double t1 = x2 - (x1 + x3) / 2.0;
+	double t2 = y2 - (y1 + y3) / 2.0;
+	t1 *= t1;
+	t2 *= t2;
+	return sqrt(t1 + t2);
+}
+
+double Median3(double x1, double y1, double x2, double y2, double x3, double y3)
+{
+	double t1 = x3 - (x2 + x1) / 2.0;
+	double t2 = y3 - (y2 + y1) / 2.0;
+	t1 *= t1;
+	t2 *= t2;
+	return sqrt(t1 + t2);
+}
+
+std::unique_ptr<std::unique_ptr<double[]>[]> GenerateInputsMedians(int nRecords, int nFeatures, double min, double max) {
+	auto x = std::make_unique<std::unique_ptr<double[]>[]>(nRecords);
+	for (int i = 0; i < nRecords; ++i) {
+		x[i] = std::make_unique<double[]>(nFeatures);
+		for (int j = 0; j < nFeatures; ++j) {
+			x[i][j] = static_cast<double>((rand() % 10000) / 10000.0);
+			x[i][j] *= (max - min);
+			x[i][j] += min;
+		}
+	}
+	return x;
+}
+
+std::unique_ptr<std::unique_ptr<double[]>[]> ComputeTargetsMedians(const std::unique_ptr<std::unique_ptr<double[]>[]>& x, int nRecords) {
+	auto y = std::make_unique<std::unique_ptr<double[]>[]>(nRecords);
+	for (int i = 0; i < nRecords; ++i) {
+		y[i] = std::make_unique<double[]>(3);
+		for (int j = 0; j < 3; ++j) {
+			y[i][0] = Median1(x[i][0], x[i][1], x[i][2], x[i][3], x[i][4], x[i][5]);
+			y[i][1] = Median2(x[i][0], x[i][1], x[i][2], x[i][3], x[i][4], x[i][5]);
+			y[i][2] = Median3(x[i][0], x[i][1], x[i][2], x[i][3], x[i][4], x[i][5]);
+		}
+	}
+	return y;
+}
+///////// End medians
+
 void TestSingleFunction() {
 	int nTrainingRecords = 1000;
 	int nValidationRecords = 200;
@@ -605,6 +659,127 @@ void Tetrahedron() {
 		printf("Epoch %d, RMSE %f, Pearsons: %f %f %f %f, time %2.3f\n", epoch, error, p1, p2, p3, p4,
 			(double)(current_time - start_application) / CLOCKS_PER_SEC);
 	}
+	printf("\n");
+}
+
+void Medians() {
+	int nTrainingRecords = 10000;
+	int nValidationRecords = 2000;
+	int nFeatures = 6;
+	int nTargets = 3;
+	double min = 0.0;
+	double max = 1.0;
+	auto features_training = GenerateInputsMedians(nTrainingRecords, nFeatures, min, max);
+	auto features_validation = GenerateInputsMedians(nValidationRecords, nFeatures, min, max);
+	auto targets_training = ComputeTargetsMedians(features_training, nTrainingRecords);
+	auto targets_validation = ComputeTargetsMedians(features_validation, nValidationRecords);
+
+	//data is ready, we start training
+	clock_t start_application = clock();
+	clock_t current_time = clock();
+
+	std::vector<double> argmin;
+	std::vector<double> argmax;
+	Helper::FindMinMaxMatrix(argmin, argmax, features_training, nTrainingRecords, nFeatures);
+
+	int nU0 = 20;
+	int nU1 = 10;
+	int nU2 = nTargets;
+
+	auto layer0 = std::make_unique<Layer>(nU0, nFeatures, argmin, argmax, 6);
+	auto layer1 = std::make_unique<Layer>(nU1, nU0, 12);
+	auto layer2 = std::make_unique<Layer>(nU2, nU1, 22);
+
+	auto models0 = std::make_unique<double[]>(nU0);
+	auto models1 = std::make_unique<double[]>(nU1);
+	auto models2 = std::make_unique<double[]>(nU2);
+
+	auto deltas2 = std::make_unique<double[]>(nU2);
+	auto deltas1 = std::make_unique<double[]>(nU1);
+	auto deltas0 = std::make_unique<double[]>(nU0);
+
+	auto indexes0 = std::make_unique<std::unique_ptr<int[]>[]>(nU0);
+	auto offsets0 = std::make_unique<std::unique_ptr<double[]>[]>(nU0);
+	for (int i = 0; i < nU0; ++i) {
+		indexes0[i] = std::make_unique<int[]>(nFeatures);
+		offsets0[i] = std::make_unique<double[]>(nFeatures);
+	}
+
+	auto indexes1 = std::make_unique<std::unique_ptr<int[]>[]>(nU1);
+	auto offsets1 = std::make_unique<std::unique_ptr<double[]>[]>(nU1);
+	for (int i = 0; i < nU1; ++i) {
+		indexes1[i] = std::make_unique<int[]>(nU0);
+		offsets1[i] = std::make_unique<double[]>(nU0);
+	}
+
+	auto indexes2 = std::make_unique<std::unique_ptr<int[]>[]>(nU2);
+	auto offsets2 = std::make_unique<std::unique_ptr<double[]>[]>(nU2);
+	for (int i = 0; i < nU2; ++i) {
+		indexes2[i] = std::make_unique<int[]>(nU1);
+		offsets2[i] = std::make_unique<double[]>(nU1);
+	}
+
+	auto actual0 = std::make_unique<double[]>(nValidationRecords);
+	auto actual1 = std::make_unique<double[]>(nValidationRecords);
+	auto actual2 = std::make_unique<double[]>(nValidationRecords);
+
+	auto computed0 = std::make_unique<double[]>(nValidationRecords);
+	auto computed1 = std::make_unique<double[]>(nValidationRecords);
+	auto computed2 = std::make_unique<double[]>(nValidationRecords);
+
+	printf("Training medians of random triangles\n");
+	for (int epoch = 0; epoch < 30; ++epoch) {
+		for (int i = 0; i < nTrainingRecords; ++i) {
+			layer0->Input2Output(features_training[i], models0, indexes0, offsets0);
+			layer1->Input2Output(models0, models1, indexes1, offsets1);
+			layer2->Input2Output(models1, models2, indexes2, offsets2);
+
+			for (int j = 0; j < nTargets; ++j) {
+				deltas2[j] = targets_training[i][j] - models2[j];
+			}
+
+			std::fill(deltas0.get(), deltas0.get() + nU0, 0.0);
+			std::fill(deltas1.get(), deltas1.get() + nU1, 0.0);
+
+			layer2->GetDeltas(deltas2, deltas1, indexes2);
+			layer1->GetDeltas(deltas1, deltas0, indexes1);
+
+			layer2->Update(models1, deltas2, 0.005, indexes2, offsets2);
+			layer1->Update(models0, deltas1, 0.1, indexes1, offsets1);
+			layer0->Update(features_training[i], deltas0, 0.1, indexes0, offsets0);
+		}
+
+		double error = 0.0;
+		for (int i = 0; i < nValidationRecords; ++i) {
+			layer0->Input2Output(features_validation[i], models0);
+			layer1->Input2Output(models0, models1);
+			layer2->Input2Output(models1, models2);
+
+			for (int j = 0; j < nTargets; ++j) {
+				double err = targets_validation[i][j] - models2[j];
+				error += err * err;
+			}
+
+			actual0[i] = targets_validation[i][0];
+			actual1[i] = targets_validation[i][1];
+			actual2[i] = targets_validation[i][2];
+
+			computed0[i] = models2[0];
+			computed1[i] = models2[1];
+			computed2[i] = models2[2];
+		}
+		double p1 = Helper::Pearson(computed0, actual0, nValidationRecords);
+		double p2 = Helper::Pearson(computed1, actual1, nValidationRecords);
+		double p3 = Helper::Pearson(computed2, actual2, nValidationRecords);
+
+		error /= nTargets;
+		error /= nValidationRecords;
+		error = sqrt(error);
+		current_time = clock();
+		printf("Epoch %d, RMSE %f, Pearsons: %f %f %f, time %2.3f\n", epoch, error, p1, p2, p3,
+			(double)(current_time - start_application) / CLOCKS_PER_SEC);
+	}
+	printf("\n");
 }
 
 int main() {
@@ -622,5 +797,8 @@ int main() {
 
 	//Related targets, the areas of the faces of tetrahedron given by random vertices
 	Tetrahedron();
+
+	//Related targets, the medians of random triangles
+	Medians();
 }
 
